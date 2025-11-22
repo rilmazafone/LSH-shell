@@ -7,6 +7,25 @@
 #define LSH_RL_BUFFSIZE 1024
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
+void sys_exit(int code);
+ssize_t sys_write(int fd,const void *buf,size_t len);
+ssize_t sys_read(int fd,void *buf,size_t len);
+
+int lsh_getchar(void){
+    unsigned char c;
+    ssize_t n = sys_read(0,&c,1);
+
+    if(n<=0){
+        return EOF;
+    }
+    return c;
+}
+
+void print(const char *s){
+    size_t len = 0;
+    while(s[len] != '\0') len++;
+    sys_write(1,s,len);
+}
 
 char *lsh_read_line(void) {
     int buffsize = LSH_RL_BUFFSIZE;
@@ -15,12 +34,12 @@ char *lsh_read_line(void) {
     int c;
 
     if (!buffer) {
-        fprintf(stderr, "Out of memory!\n");
-        exit(EXIT_FAILURE);
+        sys_write(2, "Out of memory!\n",16);
+        sys_exit(1);
     }
     
     while (1) {
-        c = getchar();
+        c = lsh_getchar();
         if (c == EOF || c == '\n') {
             buffer[position] = '\0';
             return buffer;
@@ -33,8 +52,8 @@ char *lsh_read_line(void) {
             buffsize += LSH_RL_BUFFSIZE;
             buffer = realloc(buffer, buffsize);
             if (!buffer) {
-                fprintf(stderr, "Out of memory!\n");
-                exit(EXIT_FAILURE);
+                sys_write(2, "Out of memory!\n",16);
+                sys_exit(1);
             }
         }
     }
@@ -46,8 +65,8 @@ char **lsh_split_line(char *line) {
     char *token;
 
     if (!tokens) {
-        fprintf(stderr, "Out of memory!\n");
-        exit(EXIT_FAILURE);
+        sys_write(2, "Out of memory!\n",16);
+        sys_exit(1);
     }
     
     token = strtok(line, LSH_TOK_DELIM);
@@ -59,8 +78,8 @@ char **lsh_split_line(char *line) {
             buffsize += LSH_TOK_BUFSIZE;
             tokens = realloc(tokens, buffsize * sizeof(char*));
             if (!tokens) {
-                fprintf(stderr, "Out of memory!\n");
-                exit(EXIT_FAILURE);
+                sys_write(2, "Out of memory!\n",16);
+                sys_exit(1);
             }
         }
         token = strtok(NULL, LSH_TOK_DELIM);
@@ -79,7 +98,7 @@ int lsh_launch(char **args) {
         if (execvp(args[0], args) == -1) {
             perror("lsh");
         }
-        exit(EXIT_FAILURE);
+        sys_exit(1);
     } else if (pid < 0) {
         // Fork failed
         perror("lsh");
@@ -114,7 +133,7 @@ int lsh_num_builtins() {
 
 int lsh_cd(char **args) {
     if (args[1] == NULL) {
-        fprintf(stderr, "lsh: expected argument to \"cd\"\n");
+        sys_write(2, "lsh: expected argument to \"cd\"\n", 32);
     } else {
         if (chdir(args[1]) != 0) {
             perror("lsh");
@@ -125,14 +144,14 @@ int lsh_cd(char **args) {
 
 int lsh_help(char **args) {
     int i;
-    printf("LSH Shell\n");
-    printf("Type program names and arguments, and hit enter.\n");
-    printf("The following are built in:\n");
+    print("LSH Shell\n");
+    print("Type program names and arguments, and hit enter.\n");
+    print("The following are built in:\n");
 
     for (i = 0; i < lsh_num_builtins(); i++) {
         printf("  %s\n", builtin_str[i]);
     }
-    printf("Use the man command for information on other programs.\n");
+    print("Use the man command for information on other programs.\n");
     return 1;
 }
 
@@ -161,7 +180,7 @@ void lsh_loop() {
     int status;
 
     do {
-        printf("> ");
+        print("> ");
         line = lsh_read_line();
         args = lsh_split_line(line);
         status = lsh_execute(args);
@@ -173,5 +192,5 @@ void lsh_loop() {
 
 int main(int argc, char *argv[]) {
     lsh_loop();
-    return EXIT_SUCCESS;
+    sys_exit(0);
 }
