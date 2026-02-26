@@ -4,22 +4,84 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
-
+#include <termios.h>
 
 #define LSH_RL_BUFFSIZE 1024
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
+#define HISTORY_SIZE 100
+#define KEY_UP    256
+#define KEY_DOWN  257
+#define KEY_RIGHT 258
+#define KEY_LEFT  259
+
 void sys_exit(int code);
 ssize_t sys_write(int fd,const void *buf,size_t len);
 ssize_t sys_read(int fd,void *buf,size_t len);
 
-int lsh_getchar(void){
-    unsigned char c;
-    ssize_t n = sys_read(0,&c,1);
+struct termios orig_termios;
 
-    if(n<=0){
+static char *history[HISTORY_SIZE];
+static int history_len = 0;
+static int history_idx = -1;
+
+void history_add(const char *line){
+    if(history_len == HISTORY_SIZE){
+        free(history[0]);
+        memmove(history, history + 1, sizeof(char*) * (HISTORY_SIZE - 1));
+        history_len--;
+    }
+    history[history_len++] = strdup(line);
+}
+
+static void redraw_line(const char *buf, int len, int pos) {
+    write(STDOUT_FILENO, "\r\033[K", 4);
+    write(STDOUT_FILENO, "> ", 2);
+    write(STDOUT_FILENO, buf, len);
+
+    if (len > pos) {
+        char seq[16];
+        int n = snprintf(seq, sizeof(seq), "\033[%dD", len - pos);
+        write(STDOUT_FILENO, seq, n);
+    }
+}
+
+void disable_raw_mode() {
+   tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+void enable_raw_mode() {
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disable_raw_mode); //restore on exit
+
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON); //turn off echo and canonical mode
+    raw.c_cc[VMIN] = 1; //non-blocking read
+    raw.c_cc[VTIME] = 0; //no timeout
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+int lsh_getchar(void) {
+    unsigned char c;
+    ssize_t n = sys_read(0, &c, 1);
+
+    if (n <= 0)
+        return EOF;
+
+    if (c == 27) {  // ESC
+        char seq[2];
+        if (sys_read(0, seq, 2) == 2) {
+            if (seq[0] == '[') {
+                switch (seq[1]) {
+                    case 'A': return KEY_UP;
+                    case 'B': return KEY_DOWN;
+                    case 'C': return KEY_RIGHT;
+                    case 'D': return KEY_LEFT;
+                }
+            }
+        }
         return EOF;
     }
+
     return c;
 }
 
@@ -35,33 +97,100 @@ void print(const char *s){
 
 char *lsh_read_line(void) {
     int buffsize = LSH_RL_BUFFSIZE;
-    int position = 0;
-    char *buffer = malloc(sizeof(char) * buffsize);
-    int c;
-
+    char *buffer = malloc(buffsize);
     if (!buffer) {
-        sys_write(2, "Out of memory!\n",16);
+        sys_write(2, "Out of memory!\n", 15);
         sys_exit(1);
     }
-    
-    while (1) {
-        c = lsh_getchar();
-        if (c == EOF || c == '\n') {
-            buffer[position] = '\0';
-            return buffer;
-        } else {
-            buffer[position] = c;
-        }
-        position++;
 
-        if (position >= buffsize) {
+    int len = 0;   /* number of chars in buffer */
+    int pos = 0;   /* cursor position           */
+    history_idx = history_len; /* start past end so "up" gives last entry */
+
+    while (1) {
+        int c = lsh_getchar();   /* returns 'w','s','a','d' for arrows */
+
+        if (c == EOF) {
+            buffer[len] = '\0';
+            return buffer;
+        }
+
+        if (c == '\n' || c == '\r') {
+            write(STDOUT_FILENO, "\n", 1);
+            buffer[len] = '\0';
+            if (len > 0) history_add(buffer);
+            history_idx = history_len;
+            return buffer;
+        }
+
+        /* Backspace */
+        if (c == 127 || c == '\b') {
+            if (pos > 0) {
+                memmove(buffer + pos - 1, buffer + pos, len - pos);
+                pos--;
+                len--;
+                buffer[len] = '\0';
+                redraw_line(buffer, len, pos);
+            }
+            continue;
+        }
+
+        /* Arrow keys (mapped by lsh_getchar) */
+        if (c == KEY_UP) {
+            if (history_idx > 0) {
+                history_idx--;
+                int hlen = strlen(history[history_idx]);
+                memcpy(buffer, history[history_idx], hlen + 1);
+                len = pos = hlen;
+                redraw_line(buffer, len, pos);
+            }
+            continue;
+        }
+        if (c == KEY_DOWN) {          
+            if (history_idx < history_len) {
+                history_idx++;
+                if (history_idx == history_len) {
+                    len = pos = 0;
+                    buffer[0] = '\0';
+                } else {
+                    int hlen = strlen(history[history_idx]);
+                    memcpy(buffer, history[history_idx], hlen + 1);
+                    len = pos = hlen;
+                }
+                redraw_line(buffer, len, pos);
+            }
+            continue;
+        }
+        if (c == KEY_LEFT) {          
+            if (pos > 0) {
+                pos--;
+                write(STDOUT_FILENO, "\033[D", 3);
+            }
+            continue;
+        }
+        if (c == KEY_RIGHT) { 
+            if (pos < len) {
+                pos++;
+                write(STDOUT_FILENO, "\033[C", 3);
+            }
+            continue;
+        }
+
+        /* Ordinary printable character — insert at cursor */
+        if (len + 1 >= buffsize) {
             buffsize += LSH_RL_BUFFSIZE;
             buffer = realloc(buffer, buffsize);
             if (!buffer) {
-                sys_write(2, "Out of memory!\n",16);
+                sys_write(2, "Out of memory!\n", 15);
                 sys_exit(1);
             }
         }
+        memmove(buffer + pos + 1, buffer + pos, len - pos);
+        buffer[pos] = c;
+        pos++;
+        len++;
+        buffer[len] = '\0';
+        redraw_line(buffer, len, pos);
     }
 }
 
@@ -185,7 +314,7 @@ void lsh_loop() {
     char *line;
     char **args;
     int status;
-
+    enable_raw_mode();
     do {
         print("> ");
         line = lsh_read_line();
