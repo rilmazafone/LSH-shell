@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
+
 
 #define LSH_RL_BUFFSIZE 1024
 #define LSH_TOK_BUFSIZE 64
@@ -19,6 +21,10 @@ int lsh_getchar(void){
         return EOF;
     }
     return c;
+}
+
+void sigint_handler(int sig){
+    write(STDOUT_FILENO, "\n> ", 3);
 }
 
 void print(const char *s){
@@ -95,6 +101,7 @@ int lsh_launch(char **args) {
     pid = fork();
     if (pid == 0) {
         // Child process
+        signal(SIGINT, SIG_DFL);
         if (execvp(args[0], args) == -1) {
             perror("lsh");
         }
@@ -191,6 +198,7 @@ void lsh_loop() {
 }
 
 int main(int argc, char *argv[]) {
+    signal(SIGINT, sigint_handler);
     lsh_loop();
     sys_exit(0);
 }
