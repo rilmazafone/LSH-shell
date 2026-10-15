@@ -79,4 +79,4 @@ terminal, plus ASAN) and the note that `detect_leaks=1` is unsupported on macOS.
 
 Started from [Write a Shell in C](https://brennan.io/2015/01/16/write-a-shell-in-c/)
 by Stephen Brennan, then extended as I learned more about how a shell — and Darwin's
-syscall interface — actually works.
+syscall interface — actually works. Also special thanks to DeepSeek-V4-Flash for fixing critical bugs like heap buffer overflow and documenting the entire project
